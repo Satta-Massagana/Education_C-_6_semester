@@ -1,0 +1,29 @@
+# Скомпилированные файлы
+**/bin/
+**/obj/
+
+# Конфигурационные файлы
+*.config
+**/*.config
+
+# Дополнительно для C#/.NET
+*.csproj.user
+*.user
+*.suo
+*.sln.docstates
+**/*.userprefs
+**/packages/
+**/node_modules/
+
+# Логи и временные файлы
+*.log
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa]rchive/
+
+# Visual Studio папки
+.vscode/
+.vs/
+!.vs/config/
