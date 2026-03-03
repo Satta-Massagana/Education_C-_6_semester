@@ -10,17 +10,17 @@ public class TaskProcessor
     {
         int chunkSize = data.Length / CHUNK_COUNT;
         var results = new decimal[data.Length];
-        var events = new ManualResetEvent[CHUNK_COUNT];
-        var exceptions = new Exception[CHUNK_COUNT];
+        var events = new ManualResetEvent[CHUNK_COUNT]; // синхронизация 8 потоков
+        var exceptions = new Exception[CHUNK_COUNT]; // ловит ошибки от 8 потоков
 
-        for (int i = 0; i < CHUNK_COUNT; i++)
+        for (int i = 0; i < CHUNK_COUNT; i++) // делим куски между потоками
         {
             events[i] = new ManualResetEvent(false);
             int startIdx = i * chunkSize;
             int endIdx = (i == CHUNK_COUNT - 1) ? data.Length : startIdx + chunkSize;
-            int chunkIndex = i; // Захватываем локальную копию
+            int chunkIndex = i;
 
-            ThreadPool.QueueUserWorkItem(_ =>
+            ThreadPool.QueueUserWorkItem(_ => // запускаем 8 задач
             {
                 try
                 {
@@ -48,6 +48,7 @@ public class TaskProcessor
         return results;
     }
 
+    // обертка ThreadPool в TAP
     public Task<decimal[]> ProcessDataAsync(decimal[] data)
     {
         var tcs = new TaskCompletionSource<decimal[]>();
@@ -66,6 +67,7 @@ public class TaskProcessor
         return tcs.Task;
     }
 
+    // обертка ThreadPool в APM
     public decimal[] ProcessDataWithAPM(decimal[] data)
     {
         var apmState = new ApmState(data);
@@ -82,6 +84,7 @@ public class TaskProcessor
         }
     }
 
+    // Обработка по APM
     private class ApmState : IAsyncResult
     {
         private readonly decimal[] _data;
@@ -130,6 +133,7 @@ public class TaskProcessor
             return this;
         }
 
+        // дожидается завершения + возвращает результат обработки для APM
         public decimal[] EndProcessData(IAsyncResult result)
         {
             if (!IsCompleted)

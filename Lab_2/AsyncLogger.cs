@@ -7,11 +7,13 @@ public static class AsyncLogger
 {
     private static readonly string logFile = "app.log";
 
+    // логирование по TAP - асинхронное логирование через Task
     public static Task LogAsync(string message)
     {
         return Task.Run(async () =>
         {
             string fullMessage = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - {message}\r\n";
+            // Нужно для FileStream.WriteAsync, так как работает только с байтами, а не строками
             var bytes = System.Text.Encoding.UTF8.GetBytes(fullMessage);
 
             using var fs = new FileStream(
@@ -19,13 +21,15 @@ public static class AsyncLogger
                 FileMode.Append,
                 FileAccess.Write,
                 FileShare.ReadWrite,
-                4096,
+                4096, // Размер буфера (4KB), чтоб меньше обращаться к диску
                 FileOptions.Asynchronous
             );
+            // Асинхронная запись байтов в файл
             await fs.WriteAsync(bytes, 0, bytes.Length);
         });
     }
 
+    // логирование по APM - асинхронное логирование через IAsyncResult
     public static IAsyncResult LogWithCallback(string message, Action callback)
     {
         var state = new LogApmState(message, callback);

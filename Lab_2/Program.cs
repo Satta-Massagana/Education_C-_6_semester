@@ -8,7 +8,7 @@ class Program
 {
     static void Main()
     {
-        const int dataSize = 10_000_000;
+        const int dataSize = 500_000_000;
         var random = new Random(42);
         var data = new decimal[dataSize];
 
@@ -20,12 +20,12 @@ class Program
         var processor = new TaskProcessor();
 
         // Последовательная обработка
-        var swSeq = Stopwatch.StartNew();
+        var swSeq = Stopwatch.StartNew(); // из System.Diagnostics
         var seqResult = SequentialProcess(data);
         swSeq.Stop();
 
         // ThreadPool
-        AsyncLogger.LogAsync("Начало ThreadPool обработки").Wait();
+        AsyncLogger.LogAsync("Начало ThreadPool обработки").Wait(); // Wait для порядока логов в файле
         var swTp = Stopwatch.StartNew();
         var tpResult = processor.ProcessDataWithThreadPool(data);
         swTp.Stop();
