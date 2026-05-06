@@ -4,67 +4,73 @@ using System.Threading;
 
 public class TransactionProcessor
 {
-    // Без синхронизации (используем пул потоков)
+    // Без синхронизации (создаем отдельный поток для каждой транзакции)
     public decimal ProcessTransactionsConcurrently(BankAccount account, List<decimal> transactions)
     {
-        var done = new CountdownEvent(transactions.Count);
+        var threads = new List<Thread>(transactions.Count);
         foreach (var amount in transactions)
         {
             var localAmount = amount;
-            ThreadPool.QueueUserWorkItem(_ =>
+            var thread = new Thread(() =>
             {
-                if (localAmount > 0)
+                if (localAmount >= 0)
                     account.Deposit(localAmount);
                 else
                     account.Withdraw(-localAmount);
-                done.Signal();
             });
+            threads.Add(thread);
+            thread.Start();
         }
-        done.Wait();
+        foreach (var thread in threads)
+            thread.Join();
         return account.Balance;
     }
 
-    // С lock (используем пул потоков)
+    // С lock (создаем отдельный поток для каждой транзакции)
     public decimal ProcessTransactionsWithLock(BankAccount account, List<decimal> transactions)
     {
-        var done = new CountdownEvent(transactions.Count);
+        var threads = new List<Thread>(transactions.Count);
         foreach (var amount in transactions)
         {
             var localAmount = amount;
-            ThreadPool.QueueUserWorkItem(_ =>
+            var thread = new Thread(() =>
             {
-                if (localAmount > 0)
+                if (localAmount >= 0)
                     account.DepositWithLock(localAmount);
                 else
                     account.WithdrawWithLock(-localAmount);
-                done.Signal();
             });
+            threads.Add(thread);
+            thread.Start();
         }
-        done.Wait();
+        foreach (var thread in threads)
+            thread.Join();
         return account.Balance;
     }
 
-    // С Monitor (используем пул потоков)
+    // С Monitor (создаем отдельный поток для каждой транзакции)
     public decimal ProcessTransactionsWithMonitor(BankAccount account, List<decimal> transactions)
     {
-        var done = new CountdownEvent(transactions.Count);
+        var threads = new List<Thread>(transactions.Count);
         foreach (var amount in transactions)
         {
             var localAmount = amount;
-            ThreadPool.QueueUserWorkItem(_ =>
+            var thread = new Thread(() =>
             {
-                if (localAmount > 0)
+                if (localAmount >= 0)
                     account.DepositWithMonitor(localAmount);
                 else
                     account.WithdrawWithMonitor(-localAmount);
-                done.Signal();
             });
+            threads.Add(thread);
+            thread.Start();
         }
-        done.Wait();
+        foreach (var thread in threads)
+            thread.Join();
         return account.Balance;
     }
 
-    // Демонстрация deadlock и безопасных переводов (увеличено количество операций)
+    // Демонстрация deadlock и безопасных переводов
     public void ProcessConcurrentTransfers(List<BankAccount> accounts, int transferCount)
     {
         Console.WriteLine("\n=== Демонстрация deadlock ===");
@@ -101,21 +107,24 @@ public class TransactionProcessor
             safeAccounts.Add(new BankAccount(i, 10000));
 
         var done = new CountdownEvent(transferCount);
-        var rand = new Random(42);
         for (int i = 0; i < transferCount; i++)
         {
             ThreadPool.QueueUserWorkItem(_ =>
             {
-                int fromIdx = rand.Next(safeAccounts.Count);
-                int toIdx = rand.Next(safeAccounts.Count);
-                if (fromIdx == toIdx)
+                try
+                {
+                    int fromIdx = Random.Shared.Next(safeAccounts.Count);
+                    int toIdx = Random.Shared.Next(safeAccounts.Count);
+                    if (fromIdx == toIdx)
+                        return;
+
+                    decimal amount = (decimal)(Random.Shared.NextDouble() * 100 + 1);
+                    safeAccounts[fromIdx].TransferSafe(safeAccounts[toIdx], amount);
+                }
+                finally
                 {
                     done.Signal();
-                    return;
                 }
-                decimal amount = (decimal)(rand.NextDouble() * 100 + 1);
-                safeAccounts[fromIdx].TransferSafe(safeAccounts[toIdx], amount);
-                done.Signal();
             });
         }
         done.Wait();

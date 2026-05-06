@@ -5,7 +5,7 @@ class Program
 {
     static void Main(string[] args)
     {
-        const int transactionCount = 1000000;
+        const int transactionCount = 10000;
         var rand = new Random(42);
         var transactions = new List<decimal>();
         decimal expectedDelta = 0;
@@ -27,6 +27,7 @@ class Program
         decimal initialBalance = 100000m;
         decimal expectedBalance = initialBalance + expectedDelta;
 
+        Console.WriteLine("=== Результаты тестирования синхронизации ===");
         Console.WriteLine($"Количество транзакций: {transactionCount}");
         Console.WriteLine($"Ожидаемый итоговый баланс: {expectedBalance:C}\n");
 

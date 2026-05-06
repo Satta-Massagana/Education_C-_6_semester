@@ -41,13 +41,19 @@ public class BankAccount
     public void DepositWithLock(decimal amount)
     {
         lock (_lockObj)
+        {
+            Thread.SpinWait(1000);
             _balance += amount;
+        }
     }
 
     public void WithdrawWithLock(decimal amount)
     {
         lock (_lockObj)
+        {
+            Thread.SpinWait(1000);
             _balance -= amount;
+        }
     }
 
     public void TransferWithLock(BankAccount target, decimal amount)
@@ -68,6 +74,7 @@ public class BankAccount
         Monitor.Enter(_lockObj);
         try
         {
+            Thread.SpinWait(1000);
             _balance += amount;
         }
         finally
@@ -81,6 +88,7 @@ public class BankAccount
         Monitor.Enter(_lockObj);
         try
         {
+            Thread.SpinWait(1000);
             _balance -= amount;
         }
         finally
@@ -111,13 +119,14 @@ public class BankAccount
         }
     }
 
-    // --- С таймаутом ---
+    // --- С таймаутом для Monitor (позволяет избежать deadlock) ---
     public bool DepositWithTimeout(decimal amount, int timeoutMs)
     {
         if (Monitor.TryEnter(_lockObj, timeoutMs))
         {
             try
             {
+                Thread.SpinWait(1000);
                 _balance += amount;
                 return true;
             }
@@ -135,6 +144,7 @@ public class BankAccount
         {
             try
             {
+                Thread.SpinWait(1000);
                 _balance -= amount;
                 return true;
             }

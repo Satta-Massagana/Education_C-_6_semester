@@ -4,40 +4,46 @@ using System.Diagnostics;
 
 public class SynchronizationBenchmark
 {
-    public (TimeSpan elapsed, decimal balance) BenchmarkNoSync(
+    public (TimeSpan elapsed, decimal balance, bool isCorrect) BenchmarkNoSync(
         BankAccount account,
-        List<decimal> transactions
+        List<decimal> transactions,
+        decimal expectedBalance
     )
     {
         var processor = new TransactionProcessor();
         var sw = Stopwatch.StartNew();
         decimal result = processor.ProcessTransactionsConcurrently(account, transactions);
         sw.Stop();
-        return (sw.Elapsed, result);
+        bool isCorrect = Math.Abs(result - expectedBalance) < 0.001m;
+        return (sw.Elapsed, result, isCorrect);
     }
 
-    public (TimeSpan elapsed, decimal balance) BenchmarkWithLock(
+    public (TimeSpan elapsed, decimal balance, bool isCorrect) BenchmarkWithLock(
         BankAccount account,
-        List<decimal> transactions
+        List<decimal> transactions,
+        decimal expectedBalance
     )
     {
         var processor = new TransactionProcessor();
         var sw = Stopwatch.StartNew();
         decimal result = processor.ProcessTransactionsWithLock(account, transactions);
         sw.Stop();
-        return (sw.Elapsed, result);
+        bool isCorrect = Math.Abs(result - expectedBalance) < 0.001m;
+        return (sw.Elapsed, result, isCorrect);
     }
 
-    public (TimeSpan elapsed, decimal balance) BenchmarkWithMonitor(
+    public (TimeSpan elapsed, decimal balance, bool isCorrect) BenchmarkWithMonitor(
         BankAccount account,
-        List<decimal> transactions
+        List<decimal> transactions,
+        decimal expectedBalance
     )
     {
         var processor = new TransactionProcessor();
         var sw = Stopwatch.StartNew();
         decimal result = processor.ProcessTransactionsWithMonitor(account, transactions);
         sw.Stop();
-        return (sw.Elapsed, result);
+        bool isCorrect = Math.Abs(result - expectedBalance) < 0.001m;
+        return (sw.Elapsed, result, isCorrect);
     }
 
     public void CompareAllApproaches(
@@ -48,17 +54,38 @@ public class SynchronizationBenchmark
         decimal expectedBalance
     )
     {
-        var (noSyncTime, noSyncBalance) = BenchmarkNoSync(accountNoSync, transactions);
-        bool noSyncCorrect = Math.Abs(noSyncBalance - expectedBalance) < 0.001m;
+        var (noSyncTime, noSyncBalance, noSyncCorrect) = BenchmarkNoSync(
+            accountNoSync,
+            transactions,
+            expectedBalance
+        );
         double noSyncMs = noSyncTime.TotalMilliseconds;
 
-        var (lockTime, lockBalance) = BenchmarkWithLock(accountLock, transactions);
-        bool lockCorrect = Math.Abs(lockBalance - expectedBalance) < 0.001m;
+        var (lockTime, lockBalance, lockCorrect) = BenchmarkWithLock(
+            accountLock,
+            transactions,
+            expectedBalance
+        );
         double lockMs = lockTime.TotalMilliseconds;
 
-        var (monitorTime, monitorBalance) = BenchmarkWithMonitor(accountMonitor, transactions);
-        bool monitorCorrect = Math.Abs(monitorBalance - expectedBalance) < 0.001m;
+        var (monitorTime, monitorBalance, monitorCorrect) = BenchmarkWithMonitor(
+            accountMonitor,
+            transactions,
+            expectedBalance
+        );
         double monitorMs = monitorTime.TotalMilliseconds;
+
+        Console.WriteLine("=== Сравнение подходов к синхронизации ===");
+        Console.WriteLine(
+            $"Без синхронизации: {noSyncMs:F2} мс, результат: {(noSyncCorrect ? "корректный" : "некорректный")}"
+        );
+        Console.WriteLine(
+            $"С использованием lock: {lockMs:F2} мс, результат: {(lockCorrect ? "корректный" : "некорректный")}"
+        );
+        Console.WriteLine(
+            $"С использованием Monitor: {monitorMs:F2} мс, результат: {(monitorCorrect ? "корректный" : "некорректный")}"
+        );
+        Console.WriteLine();
 
         Console.WriteLine($"Без синхронизации:");
         Console.WriteLine($"  Время: {noSyncMs:F2} мс");
