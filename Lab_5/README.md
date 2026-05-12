@@ -1,0 +1,38 @@
+# Практическое задание 5: Безопасные коллекции
+
+В проекте реализованы потокобезопасные структуры для сценария библиотечной системы:
+
+- `ConcurrentLibraryCatalog.cs` — каталог книг на базе `ConcurrentDictionary<string, Book>` с операциями `TryAdd`, `TryRemove`, `TryUpdate`, `GetOrAdd`.
+- `TaskQueueManager.cs` — очередь задач на базе `BlockingCollection<TaskItem>` с ограниченной емкостью и обработкой через `GetConsumingEnumerable()`.
+- `ConcurrentCache.cs` — кэш на базе `ConcurrentDictionary<string, ConcurrentBag<CacheItem>>` с ленивой инициализацией через `GetOrAdd`.
+- `CollectionBenchmark.cs` — сравнение производительности `ConcurrentDictionary`, `BlockingCollection` и `Dictionary` с `lock`.
+- `Program.cs` — генерация тестовых данных, конкурентные тесты, проверка целостности данных и вывод итоговой статистики.
+
+## Что проверяется в `Program.cs`
+
+1. Генерация данных с фиксированным `Random(42)`:
+   - 1000 книг;
+   - 1000 задач;
+   - 500 элементов кэша.
+2. Нагрузочные сценарии:
+   - `ConcurrentDictionary` с 50 конкурентными потоками;
+   - `BlockingCollection` с 10 обработчиками;
+   - `ConcurrentCache` с 20 конкурентными потоками.
+3. Сравнение с синхронизированным словарем:
+   - расчет ускорения `ConcurrentDictionary vs Synchronized Dictionary`;
+   - расчет накладных расходов синхронизации.
+4. Контроль корректности:
+   - проверка целостности данных после конкурентного доступа;
+   - сообщение о наличии/отсутствии проблем синхронизации.
+
+## Запуск
+
+```
+dotnet run
+```
+
+## Краткий вывод по подходу
+
+- В рабочих компонентах (`catalog`, `queue`, `cache`) ручные примитивы синхронизации не используются.
+- Для конкурентных коллекций применяются рекомендованные `Try*` методы и `GetConsumingEnumerable()`.
+- Отдельный benchmark с `Dictionary + lock` добавлен только для сравнения производительности.
