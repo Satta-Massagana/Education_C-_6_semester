@@ -5,7 +5,7 @@
 - `ConcurrentLibraryCatalog.cs` — каталог книг на базе `ConcurrentDictionary<string, Book>` с операциями `TryAdd`, `TryRemove`, `TryUpdate`, `GetOrAdd`.
 - `TaskQueueManager.cs` — очередь задач на базе `BlockingCollection<TaskItem>` с ограниченной емкостью и обработкой через `GetConsumingEnumerable()`.
 - `ConcurrentCache.cs` — кэш на базе `ConcurrentDictionary<string, ConcurrentBag<CacheItem>>` с ленивой инициализацией через `GetOrAdd`.
-- `CollectionBenchmark.cs` — сравнение производительности `ConcurrentDictionary`, `BlockingCollection` и `Dictionary` с `lock`.
+- `CollectionBenchmark.cs` — сравнение производительности `ConcurrentDictionary`, `BlockingCollection` и `Dictionary` с `lock` в двух режимах: низкая и высокая конкуренция за ключи.
 - `Program.cs` — генерация тестовых данных, конкурентные тесты, проверка целостности данных и вывод итоговой статистики.
 
 ## Что проверяется в `Program.cs`
@@ -19,8 +19,9 @@
    - `BlockingCollection` с 10 обработчиками;
    - `ConcurrentCache` с 20 конкурентными потоками.
 3. Сравнение с синхронизированным словарем:
-   - расчет ускорения `ConcurrentDictionary vs Synchronized Dictionary`;
-   - расчет накладных расходов синхронизации.
+   - честное сравнение с одинаковым подсчетом операций (`Interlocked` в обоих тестах);
+   - сценарий высокой конкуренции (пул из 100 ключей);
+   - среднее время по 3 прогонам и понятный итог, какая коллекция быстрее.
 4. Контроль корректности:
    - проверка целостности данных после конкурентного доступа;
    - сообщение о наличии/отсутствии проблем синхронизации.

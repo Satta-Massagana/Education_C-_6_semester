@@ -1,3 +1,5 @@
+// Очередь задач на BlockingCollection — сценарий «производитель / потребитель».
+// Один поток (или несколько) кладёт задачи, другие потоки забирают и выполняют.
 using System.Collections.Concurrent;
 
 namespace Lab5.ConcurrentCollections;
@@ -24,6 +26,7 @@ public sealed class TaskQueueManager
             );
         }
 
+        // Ограниченная ёмкость: при переполнении Add будет ждать, пока потребитель освободит место.
         TaskQueue = new BlockingCollection<TaskItem>(boundedCapacity);
     }
 
@@ -72,6 +75,8 @@ public sealed class TaskQueueManager
                 Task.Run(
                     () =>
                     {
+                        // GetConsumingEnumerable: блокируется, пока в очереди есть элементы;
+                        // завершается после CompleteAdding(), когда очередь опустеет.
                         foreach (
                             TaskItem taskItem in TaskQueue.GetConsumingEnumerable(cancellationToken)
                         )
@@ -83,7 +88,7 @@ public sealed class TaskQueueManager
                             }
                             catch
                             {
-                                // Task failures are intentionally ignored for benchmark-focused processing.
+                                // Ошибки внутри задачи не останавливают остальных обработчиков.
                             }
                         }
                     },
@@ -98,12 +103,13 @@ public sealed class TaskQueueManager
         }
         catch (OperationCanceledException)
         {
-            // Cancellation is expected when token is requested.
+            // Отмена по токену — штатный способ остановить обработчиков.
         }
 
         return processedTasks;
     }
 
+    // После этого новые задачи добавить нельзя; потребители доработают оставшиеся.
     public void CompleteAdding()
     {
         TaskQueue.CompleteAdding();

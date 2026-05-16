@@ -1,3 +1,5 @@
+// Кэш: ConcurrentDictionary + ConcurrentBag.
+// Словарь хранит ключи, а для каждого ключа — «мешок» элементов истории (ConcurrentBag).
 using System.Collections.Concurrent;
 
 namespace Lab5.ConcurrentCollections;
@@ -19,6 +21,7 @@ public sealed class ConcurrentCache
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(value);
 
+        // GetOrAdd: создаёт ConcurrentBag для нового ключа без отдельного lock.
         ConcurrentBag<CacheItem> bag = Cache.GetOrAdd(key, _ => new ConcurrentBag<CacheItem>());
         bag.Add(
             new CacheItem
@@ -37,6 +40,7 @@ public sealed class ConcurrentCache
         if (Cache.TryGetValue(key, out ConcurrentBag<CacheItem>? bag))
         {
             DateTime now = DateTime.UtcNow;
+            // Берём самый свежий элемент, у которого не истёк срок жизни.
             CacheItem? lastValid = bag.Where(item => now - item.Timestamp <= item.ExpirationTime)
                 .OrderByDescending(item => item.Timestamp)
                 .FirstOrDefault();

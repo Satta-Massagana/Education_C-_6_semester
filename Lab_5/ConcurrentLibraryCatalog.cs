@@ -1,3 +1,5 @@
+// ConcurrentDictionary
+// Потокобезопасность обеспечивается методами Try* / GetOrAdd — без lock и Monitor.
 using System.Collections.Concurrent;
 
 namespace Lab5.ConcurrentCollections;
@@ -10,6 +12,7 @@ public sealed class Book
 
 public sealed class ConcurrentLibraryCatalog
 {
+    // Основное хранилище: ключ — название книги, значение — объект Book.
     public ConcurrentDictionary<string, Book> Books { get; } =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -18,6 +21,7 @@ public sealed class ConcurrentLibraryCatalog
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentException.ThrowIfNullOrWhiteSpace(author);
 
+        // TryAdd: добавит только если ключа ещё нет (без гонки между потоками).
         return Books.TryAdd(title, new Book { Title = title, Author = author });
     }
 
@@ -40,6 +44,7 @@ public sealed class ConcurrentLibraryCatalog
 
         Book updatedBook = new() { Title = newTitle, Author = newAuthor };
 
+        // Если меняется ключ (название), делаем add нового + remove старого.
         if (!string.Equals(title, newTitle, StringComparison.OrdinalIgnoreCase))
         {
             if (!Books.TryAdd(newTitle, updatedBook))
@@ -56,6 +61,7 @@ public sealed class ConcurrentLibraryCatalog
             return true;
         }
 
+        // TryUpdate: заменит значение только если с момента чтения его никто не менял.
         return Books.TryUpdate(title, updatedBook, existingBook);
     }
 
@@ -103,6 +109,7 @@ public sealed class ConcurrentLibraryCatalog
         return false;
     }
 
+    // GetOrAdd: если ключа нет — создаст значение через фабрику; если есть — вернёт существующее.
     public Book GetOrAddBook(string title, string author)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
