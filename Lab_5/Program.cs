@@ -1,5 +1,5 @@
 ﻿// Два блока отчёта
-// Блок 1 — сравнение трёх типов коллекций в ОДИНАКОВЫХ условиях
+// Блок 1 — сравнение трёх типов коллекций
 // Блок 2 — сравнение двух способов сделать потокобезопасный словарь
 using System.Diagnostics;
 using Lab5.ConcurrentCollections;
@@ -49,12 +49,6 @@ bool cacheIntegrity =
     && cacheResult.SuccessfulOperations == testOperations * 2;
 
 Console.WriteLine("=== Результаты тестирования потокобезопасных коллекций ===");
-Console.WriteLine(
-    $"Единые параметры: {ReportFormat.Integer(testOperations)} циклов (запись + чтение), {ReportFormat.Integer(testWorkers)} потоков/обработчиков."
-);
-Console.WriteLine(
-    "Цикл: ConcurrentDictionary — TryUpdate + TryGet; BlockingCollection — постановка задачи + тот же TryUpdate/TryGet; ConcurrentCache — AddToCache + TryGetFromCache."
-);
 Console.WriteLine();
 
 PrintLoadTestSection("ConcurrentDictionary", dictionaryResult, dictionaryIntegrity, testWorkers);
