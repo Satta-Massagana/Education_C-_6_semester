@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <title>Distributed Compression Lab</title>
+    <style>
+        :root {
+            color-scheme: light;
+            font-family: "Segoe UI", Arial, sans-serif;
+        }
+
+        body {
+            margin: 0;
+            background: #f3f6fb;
+            color: #172033;
+        }
+
+        main {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 32px 20px 48px;
+        }
+
+        .hero, .card {
+            background: #ffffff;
+            border: 1px solid #dbe4f0;
+            border-radius: 18px;
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+
+        h1, h2, h3 {
+            margin-top: 0;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 16px;
+        }
+
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        select, input[type="file"] {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 10px;
+            border: 1px solid #b9c6d8;
+            border-radius: 10px;
+            background: #ffffff;
+        }
+
+        button {
+            border: 0;
+            border-radius: 10px;
+            padding: 11px 18px;
+            font-weight: 700;
+            cursor: pointer;
+            background: #2563eb;
+            color: #ffffff;
+        }
+
+        button.secondary {
+            background: #64748b;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: .55;
+        }
+
+        .worker {
+            border: 1px solid #dbe4f0;
+            border-radius: 14px;
+            padding: 14px;
+            background: #f8fafc;
+        }
+
+        .bar {
+            height: 14px;
+            overflow: hidden;
+            background: #dbe4f0;
+            border-radius: 999px;
+        }
+
+        .fill {
+            height: 100%;
+            background: linear-gradient(90deg, #22c55e, #2563eb);
+            transition: width .2s ease;
+        }
+
+        .muted {
+            color: #64748b;
+        }
+
+        .error {
+            color: #b91c1c;
+            font-weight: 700;
+        }
+
+        .logs {
+            max-height: 220px;
+            overflow: auto;
+            background: #0f172a;
+            color: #dbeafe;
+            border-radius: 12px;
+            padding: 14px;
+            font-family: Consolas, monospace;
+            font-size: 13px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 12px;
+        }
+
+        .stat {
+            background: #eef4ff;
+            border-radius: 12px;
+            padding: 12px;
+        }
+    </style>
+    <HeadOutlet />
+</head>
+<body>
+    <Routes />
+    <script src="_framework/blazor.web.js"></script>
+</body>
+</html>

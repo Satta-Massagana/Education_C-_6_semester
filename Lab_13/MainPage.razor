@@ -1,0 +1,250 @@
+@page "/"
+@rendermode Microsoft.AspNetCore.Components.Web.RenderMode.InteractiveServer
+@implements IDisposable
+@inject MasterCompressionService Master
+@inject WorkerRegistry Workers
+
+<main>
+    <section class="hero">
+        <h1>Распределенная система сжатия данных</h1>
+        <p class="muted">
+            Blazor-интерфейс управляет мастер-узлом, который распределяет сжатие между 4 TCP-воркерами,
+            показывает heartbeat, прогресс, сетевые задержки и сравнение с последовательной обработкой.
+        </p>
+    </section>
+
+    <section class="card">
+        <h2>Запуск сжатия</h2>
+        <div class="grid">
+            <div>
+                <label>Файл для сжатия</label>
+                <InputFile OnChange="OnFileSelected" />
+                @if (selectedFile is not null)
+                {
+                    <p class="muted">@selectedFile.Name (@FormatBytes(selectedFile.Size))</p>
+                }
+            </div>
+
+            <div>
+                <label>Алгоритм</label>
+                <select @bind="selectedAlgorithm">
+                    <option value="@CompressionAlgorithmType.GZip">GZip</option>
+                    <option value="@CompressionAlgorithmType.Deflate">Deflate</option>
+                    <option value="@CompressionAlgorithmType.Brotli">Brotli</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Режим распределения</label>
+                <select @bind="selectedMode">
+                    <option value="@DistributionMode.SingleWorker">Один воркер</option>
+                    <option value="@DistributionMode.SplitAcrossWorkers">Разделить файл на части</option>
+                    <option value="@DistributionMode.FullCopyToAllWorkers">Отправить целиком всем воркерам</option>
+                </select>
+            </div>
+        </div>
+
+        <p class="muted">
+            Лимит демонстрационной загрузки: @FormatBytes(MaxUploadSize). Результат сохраняется в папку <code>CompressedFiles</code>.
+        </p>
+
+        <button @onclick="StartCompressionAsync" disabled="@(!CanStart)">Сжать файл</button>
+        <button class="secondary" @onclick="CancelCurrentJobAsync" disabled="@(currentJob is null || currentJob.IsFinished)">Отменить задачу</button>
+
+        @if (!string.IsNullOrWhiteSpace(errorMessage))
+        {
+            <p class="error">@errorMessage</p>
+        }
+    </section>
+
+    <section class="card">
+        <h2>Состояние воркеров</h2>
+        <div class="grid">
+            @foreach (var worker in Workers.GetSnapshot())
+            {
+                <div class="worker">
+                    <h3>@worker.Id</h3>
+                    <p>@worker.Host:@worker.Port</p>
+                    <p>Статус: <strong>@(worker.IsHealthy ? "доступен" : "нет heartbeat")</strong></p>
+                    <p class="muted">Активных задач: @worker.ActiveTasks, завершено: @worker.CompletedTasks, ошибок: @worker.FailedTasks</p>
+                    <p class="muted">Последний heartbeat: @worker.LastHeartbeatUtc.ToLocalTime().ToString("HH:mm:ss")</p>
+                </div>
+            }
+        </div>
+    </section>
+
+    @if (currentJob is not null)
+    {
+        <section class="card">
+            <h2>Задача @currentJob.Id</h2>
+            <p>
+                <strong>@currentJob.FileName</strong>:
+                @currentJob.Status,
+                @FormatBytes(currentJob.OriginalBytes) → @FormatBytes(currentJob.CompressedBytes)
+            </p>
+
+            <div class="stats">
+                <div class="stat">
+                    <strong>Общее время</strong>
+                    <div>@currentJob.TotalElapsedMilliseconds мс</div>
+                </div>
+                <div class="stat">
+                    <strong>Последовательно</strong>
+                    <div>@currentJob.SequentialElapsedMilliseconds мс</div>
+                </div>
+                <div class="stat">
+                    <strong>Обмен фронт → мастер</strong>
+                    <div>@currentJob.FrontExchangeMilliseconds мс</div>
+                </div>
+                <div class="stat">
+                    <strong>Обмен мастер ↔ воркеры</strong>
+                    <div>@currentJob.WorkerExchangeMilliseconds мс</div>
+                </div>
+                <div class="stat">
+                    <strong>Коэффициент сжатия</strong>
+                    <div>@currentJob.CompressionRatio.ToString("P2", CultureInfo.CurrentCulture)</div>
+                </div>
+            </div>
+
+            <h3>Распределение по воркерам</h3>
+            <div class="grid">
+                @foreach (var progress in currentJob.WorkerProgress.Values.OrderBy(item => item.WorkerId).ThenBy(item => item.PartIndex))
+                {
+                    <div class="worker">
+                        <h3>@progress.WorkerId</h3>
+                        <p>Часть: @(progress.PartIndex + 1) / @progress.TotalParts</p>
+                        <p>Статус: @progress.Status</p>
+                        <div class="bar">
+                            <div class="fill" style="width:@progress.ProgressPercent%"></div>
+                        </div>
+                        <p class="muted">
+                            CPU: @progress.WorkerElapsedMilliseconds мс,
+                            сеть: @progress.NetworkElapsedMilliseconds мс,
+                            @FormatBytes(progress.OriginalBytes) → @FormatBytes(progress.CompressedBytes)
+                        </p>
+                        @if (!string.IsNullOrWhiteSpace(progress.ErrorMessage))
+                        {
+                            <p class="error">@progress.ErrorMessage</p>
+                        }
+                    </div>
+                }
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(currentJob.DownloadUrl))
+            {
+                <p><a href="@currentJob.DownloadUrl" target="_blank">Скачать сжатый файл</a></p>
+            }
+        </section>
+
+        <section class="card">
+            <h2>Журнал операций</h2>
+            <div class="logs">
+                @foreach (var entry in currentJob.Logs.Reverse())
+                {
+                    <div>@entry</div>
+                }
+            </div>
+        </section>
+    }
+</main>
+
+@code {
+    private const long MaxUploadSize = 128 * 1024 * 1024;
+    private readonly PeriodicTimer uiTimer = new(TimeSpan.FromMilliseconds(300));
+    private CompressionAlgorithmType selectedAlgorithm = CompressionAlgorithmType.GZip;
+    private DistributionMode selectedMode = DistributionMode.SplitAcrossWorkers;
+    private IBrowserFile? selectedFile;
+    private CompressionJob? currentJob;
+    private CancellationTokenSource? uploadCancellation;
+    private string? errorMessage;
+    private bool disposed;
+
+    private bool CanStart => selectedFile is not null && (currentJob is null || currentJob.IsFinished);
+
+    protected override void OnInitialized()
+    {
+        // Таймер обновляет UI, пока мастер и воркеры меняют состояние задачи в фоновых TPL-задачах.
+        _ = RefreshLoopAsync();
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs args)
+    {
+        selectedFile = args.File;
+        errorMessage = null;
+    }
+
+    private async Task StartCompressionAsync()
+    {
+        if (selectedFile is null)
+        {
+            errorMessage = "Выберите файл перед запуском.";
+            return;
+        }
+
+        uploadCancellation?.Dispose();
+        uploadCancellation = new CancellationTokenSource();
+        errorMessage = null;
+
+        try
+        {
+            // Поток файла читается асинхронно, чтобы не блокировать серверный UI Circuit Blazor.
+            await using var stream = selectedFile.OpenReadStream(MaxUploadSize, uploadCancellation.Token);
+            currentJob = await Master.StartCompressionAsync(
+                selectedFile.Name,
+                stream,
+                selectedAlgorithm,
+                selectedMode,
+                uploadCancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            errorMessage = "Загрузка или сжатие отменены.";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+    }
+
+    private Task CancelCurrentJobAsync()
+    {
+        if (currentJob is not null)
+        {
+            // Отмена передается через CancellationToken и останавливает пайплайн без Thread.Abort.
+            Master.CancelJob(currentJob.Id);
+            uploadCancellation?.Cancel();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task RefreshLoopAsync()
+    {
+        while (!disposed && await uiTimer.WaitForNextTickAsync())
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        var units = new[] { "B", "KB", "MB", "GB" };
+        var value = (double)bytes;
+        var unit = 0;
+
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+
+        return $"{value:0.##} {units[unit]}";
+    }
+
+    public void Dispose()
+    {
+        disposed = true;
+        uiTimer.Dispose();
+        uploadCancellation?.Dispose();
+    }
+}
