@@ -76,6 +76,18 @@
             opacity: .55;
         }
 
+        .actions {
+            margin-top: 18px;
+        }
+
+        .task-actions {
+            margin: 12px 0 18px;
+        }
+
+        .section-subtitle {
+            margin-top: 28px;
+        }
+
         .worker {
             border: 1px solid #dbe4f0;
             border-radius: 14px;
@@ -117,8 +129,8 @@
         }
 
         .stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            display: flex;
+            flex-wrap: wrap;
             gap: 12px;
         }
 
@@ -126,6 +138,66 @@
             background: #eef4ff;
             border-radius: 12px;
             padding: 12px;
+            min-width: max-content;
+            width: fit-content;
+        }
+
+        .stat strong {
+            white-space: nowrap;
+        }
+
+        .stat .value {
+            margin-top: 4px;
+        }
+
+        .stat .subvalue {
+            margin-top: 2px;
+            color: #64748b;
+        }
+
+        .comparison-table-wrapper {
+            overflow-x: auto;
+        }
+
+        .comparison-card {
+            width: calc(100vw - 40px);
+            max-width: none;
+            margin-left: calc(50% - 50vw + 20px);
+            margin-right: calc(50% - 50vw + 20px);
+        }
+
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 1180px;
+        }
+
+        .comparison-table th,
+        .comparison-table td {
+            border-bottom: 1px solid #dbe4f0;
+            padding: 10px;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        .comparison-table th {
+            background: #eef4ff;
+        }
+
+        .sort-header {
+            background: transparent;
+            color: #172033;
+            padding: 0;
+            font: inherit;
+            font-weight: 700;
+            text-align: left;
+        }
+
+        .best-value {
+            background: #bbf7d0;
+            border-radius: 6px;
+            padding: 2px 6px;
+            display: inline-block;
         }
     </style>
     <HeadOutlet />

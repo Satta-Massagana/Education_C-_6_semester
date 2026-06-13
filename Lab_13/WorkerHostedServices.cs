@@ -10,7 +10,10 @@ public sealed class WorkerClusterHostedService : IHostedService, IAsyncDisposabl
     private readonly WorkerRegistry registry;
     private readonly CompressionAlgorithmRegistry algorithms;
     private readonly ILoggerFactory loggerFactory;
-    private readonly List<WorkerNodeServer> servers = new();
+    private readonly Dictionary<string, WorkerNodeServer> servers = new(
+        StringComparer.OrdinalIgnoreCase
+    );
+    private readonly SemaphoreSlim gate = new(1, 1);
     private CancellationTokenSource? lifetimeCancellation;
 
     public WorkerClusterHostedService(
@@ -24,18 +27,68 @@ public sealed class WorkerClusterHostedService : IHostedService, IAsyncDisposabl
         this.loggerFactory = loggerFactory;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         for (var index = 1; index <= 4; index++)
         {
             var id = $"worker-{index}";
+            await StartWorkerAsync(id, cancellationToken);
+        }
+    }
+
+    public async Task<(bool Success, string Message)> StopWorkerAsync(
+        string workerId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!TryGetWorkerIndex(workerId, out _))
+            {
+                return (false, $"Воркер {workerId} не найден.");
+            }
+
+            if (!servers.Remove(workerId, out var server))
+            {
+                return (false, $"Воркер {workerId} уже остановлен.");
+            }
+
+            await server.DisposeAsync();
+            registry.MarkHeartbeat(workerId, false);
+            return (true, $"Воркер {workerId} остановлен.");
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task<(bool Success, string Message)> StartWorkerAsync(
+        string workerId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!TryGetWorkerIndex(workerId, out var index))
+            {
+                return (false, $"Воркер {workerId} не найден.");
+            }
+
+            if (servers.ContainsKey(workerId))
+            {
+                return (false, $"Воркер {workerId} уже запущен.");
+            }
+
             var port = BasePort + index;
-            registry.AddOrUpdate(id, Host, port);
+            registry.AddOrUpdate(workerId, Host, port);
 
             var descriptor = new WorkerDescriptor(
-                id,
+                workerId,
                 Host,
                 port,
                 true,
@@ -47,14 +100,19 @@ public sealed class WorkerClusterHostedService : IHostedService, IAsyncDisposabl
             var server = new WorkerNodeServer(
                 descriptor,
                 algorithms,
-                loggerFactory.CreateLogger($"WorkerNodeServer.{id}")
+                loggerFactory.CreateLogger($"WorkerNodeServer.{workerId}")
             );
 
-            server.Start(lifetimeCancellation.Token);
-            servers.Add(server);
+            // При восстановлении создается новый TcpListener, потому что остановленный listener нельзя безопасно переиспользовать.
+            server.Start(lifetimeCancellation?.Token ?? cancellationToken);
+            servers[workerId] = server;
+            registry.MarkHeartbeat(workerId, true);
+            return (true, $"Воркер {workerId} запущен.");
         }
-
-        return Task.CompletedTask;
+        finally
+        {
+            gate.Release();
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -64,10 +122,11 @@ public sealed class WorkerClusterHostedService : IHostedService, IAsyncDisposabl
             await lifetimeCancellation.CancelAsync();
         }
 
-        foreach (var server in servers)
+        foreach (var server in servers.Values)
         {
             await server.DisposeAsync();
         }
+        servers.Clear();
     }
 
     public async ValueTask DisposeAsync()
@@ -78,10 +137,25 @@ public sealed class WorkerClusterHostedService : IHostedService, IAsyncDisposabl
             lifetimeCancellation.Dispose();
         }
 
-        foreach (var server in servers)
+        foreach (var server in servers.Values)
         {
             await server.DisposeAsync();
         }
+        servers.Clear();
+        gate.Dispose();
+    }
+
+    private static bool TryGetWorkerIndex(string workerId, out int index)
+    {
+        index = 0;
+
+        if (!workerId.StartsWith("worker-", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var suffix = workerId["worker-".Length..];
+        return int.TryParse(suffix, out index) && index is >= 1 and <= 4;
     }
 }
 

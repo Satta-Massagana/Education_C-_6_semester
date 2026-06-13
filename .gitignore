@@ -27,3 +27,5 @@ x86/
 .vscode/
 .vs/
 !.vs/config/
+
+**/CompressedFiles/

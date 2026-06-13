@@ -96,7 +96,7 @@ public sealed class WorkerNodeServer : IAsyncDisposable
                 request.PayloadLength,
                 cancellationToken
             );
-            var result = await CompressPayloadAsync(request, payload, cancellationToken);
+            var result = await CompressPayloadAsync(request, payload, stream, cancellationToken);
             await TcpProtocol.WriteFrameAsync(
                 stream,
                 result.Header,
@@ -135,6 +135,7 @@ public sealed class WorkerNodeServer : IAsyncDisposable
     private async Task<(TcpResponseEnvelope Header, byte[] Payload)> CompressPayloadAsync(
         TcpRequestEnvelope request,
         byte[] payload,
+        NetworkStream stream,
         CancellationToken cancellationToken
     )
     {
@@ -143,7 +144,22 @@ public sealed class WorkerNodeServer : IAsyncDisposable
         try
         {
             var type = Enum.Parse<CompressionAlgorithmType>(request.Algorithm);
-            var compressed = await algorithms.Get(type).CompressAsync(payload, cancellationToken);
+            var compressed = await algorithms
+                .Get(type)
+                .CompressAsync(
+                    payload,
+                    request.FileName,
+                    cancellationToken,
+                    processedBytes =>
+                        WriteCompressionProgressAsync(
+                            stream,
+                            request,
+                            payload.LongLength,
+                            processedBytes,
+                            stopwatch.ElapsedMilliseconds,
+                            cancellationToken
+                        )
+                );
             stopwatch.Stop();
 
             var response = new TcpResponseEnvelope(
@@ -181,6 +197,31 @@ public sealed class WorkerNodeServer : IAsyncDisposable
 
             return (response, Array.Empty<byte>());
         }
+    }
+
+    private async ValueTask WriteCompressionProgressAsync(
+        NetworkStream stream,
+        TcpRequestEnvelope request,
+        long totalBytes,
+        long processedBytes,
+        long elapsedMilliseconds,
+        CancellationToken cancellationToken
+    )
+    {
+        var response = new TcpResponseEnvelope(
+            "progress",
+            true,
+            descriptor.Id,
+            request.JobId,
+            request.PartIndex,
+            0,
+            totalBytes,
+            processedBytes,
+            elapsedMilliseconds,
+            null
+        );
+
+        await TcpProtocol.WriteFrameAsync(stream, response, Array.Empty<byte>(), cancellationToken);
     }
 
     public async ValueTask DisposeAsync()

@@ -35,7 +35,9 @@ public sealed class TcpCompressionClient
 
     public async Task<WorkerCompressionResult> CompressAsync(
         CompressionWorkItem item,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action<long, long>? sendProgressCallback = null,
+        Action<TcpResponseEnvelope>? workerProgressCallback = null
     )
     {
         var networkStopwatch = Stopwatch.StartNew();
@@ -55,12 +57,36 @@ public sealed class TcpCompressionClient
             item.Payload.LongLength
         );
 
-        // Мастер отправляет задание воркеру по TCP и асинхронно ожидает ответ.
-        await TcpProtocol.WriteFrameAsync(stream, request, item.Payload, cancellationToken);
-        var header = await TcpProtocol.ReadHeaderAsync<TcpResponseEnvelope>(
+        // Мастер отправляет payload кусками, чтобы UI видел прогресс передачи больших файлов.
+        await TcpProtocol.WriteFrameAsync(
             stream,
-            cancellationToken
+            request,
+            item.Payload,
+            cancellationToken,
+            (sent, total) =>
+            {
+                sendProgressCallback?.Invoke(sent, total);
+                return ValueTask.CompletedTask;
+            }
         );
+
+        TcpResponseEnvelope header;
+        while (true)
+        {
+            header = await TcpProtocol.ReadHeaderAsync<TcpResponseEnvelope>(
+                stream,
+                cancellationToken
+            );
+
+            if (header.Command.Equals("progress", StringComparison.OrdinalIgnoreCase))
+            {
+                workerProgressCallback?.Invoke(header);
+                continue;
+            }
+
+            break;
+        }
+
         var payload = await TcpProtocol.ReadPayloadAsync(
             stream,
             header.PayloadLength,

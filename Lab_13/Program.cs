@@ -13,9 +13,12 @@ builder.Services.AddSingleton<IWorkerSelectionStrategy, LeastLoadedWorkerSelecti
 builder.Services.AddSingleton<TcpCompressionClient>();
 builder.Services.AddSingleton<CompressionPipeline>();
 builder.Services.AddSingleton<MasterCompressionService>();
+builder.Services.AddSingleton<WorkerClusterHostedService>();
 
 // HostedService запускает 4 воркера, а монитор отдельно проверяет heartbeat.
-builder.Services.AddHostedService<WorkerClusterHostedService>();
+builder.Services.AddHostedService(provider =>
+    provider.GetRequiredService<WorkerClusterHostedService>()
+);
 builder.Services.AddHostedService<WorkerMonitorHostedService>();
 
 var app = builder.Build();
@@ -42,6 +45,32 @@ app.MapGet(
         return File.Exists(path)
             ? Results.File(path, "application/octet-stream", safeFileName)
             : Results.NotFound("Файл не найден.");
+    }
+);
+
+app.MapPost(
+    "/debug/workers/{workerId}/stop",
+    async (
+        string workerId,
+        WorkerClusterHostedService cluster,
+        CancellationToken cancellationToken
+    ) =>
+    {
+        var result = await cluster.StopWorkerAsync(workerId, cancellationToken);
+        return result.Success ? Results.Ok(result.Message) : Results.BadRequest(result.Message);
+    }
+);
+
+app.MapPost(
+    "/debug/workers/{workerId}/start",
+    async (
+        string workerId,
+        WorkerClusterHostedService cluster,
+        CancellationToken cancellationToken
+    ) =>
+    {
+        var result = await cluster.StartWorkerAsync(workerId, cancellationToken);
+        return result.Success ? Results.Ok(result.Message) : Results.BadRequest(result.Message);
     }
 );
 

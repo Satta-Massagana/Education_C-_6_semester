@@ -5,8 +5,7 @@ namespace Lab_13;
 public enum CompressionAlgorithmType
 {
     GZip,
-    Deflate,
-    Brotli,
+    Zip,
 }
 
 public enum DistributionMode
@@ -99,12 +98,17 @@ public sealed class CompressionJob
     public DistributionMode Mode { get; init; }
     public long OriginalBytes { get; init; }
     public long CompressedBytes { get; set; }
-    public long SequentialElapsedMilliseconds { get; set; }
+    public long UploadedBytes { get; set; }
+    public long WorkerArchiveElapsedMilliseconds { get; set; }
     public long FrontExchangeMilliseconds { get; set; }
     public long WorkerExchangeMilliseconds { get; set; }
+    public long WorkerExchangeBytes { get; set; }
     public long TotalElapsedMilliseconds { get; set; }
     public int TotalParts { get; set; }
+    public int OverallProgressPercent { get; set; }
     public string Status { get; set; } = "Создана";
+    public string? ErrorMessage { get; set; }
+    public DateTimeOffset? CompletedAtUtc { get; set; }
     public string? OutputPath { get; set; }
     public string? DownloadUrl { get; set; }
     public ConcurrentDictionary<string, WorkerProgress> WorkerProgress { get; } = new();

@@ -12,7 +12,8 @@ public static class TcpProtocol
         NetworkStream stream,
         THeader header,
         byte[] payload,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Func<long, long, ValueTask>? payloadProgressCallback = null
     )
     {
         var json = JsonSerializer.Serialize(header, JsonOptions) + "\n";
@@ -22,7 +23,20 @@ public static class TcpProtocol
         await stream.WriteAsync(headerBytes, cancellationToken);
         if (payload.Length > 0)
         {
-            await stream.WriteAsync(payload, cancellationToken);
+            const int chunkSize = 1024 * 1024;
+            long sent = 0;
+
+            while (sent < payload.LongLength)
+            {
+                var length = (int)Math.Min(chunkSize, payload.LongLength - sent);
+                await stream.WriteAsync(payload.AsMemory((int)sent, length), cancellationToken);
+                sent += length;
+
+                if (payloadProgressCallback is not null)
+                {
+                    await payloadProgressCallback(sent, payload.LongLength);
+                }
+            }
         }
 
         await stream.FlushAsync(cancellationToken);
@@ -41,7 +55,7 @@ public static class TcpProtocol
             var read = await stream.ReadAsync(oneByte, cancellationToken);
             if (read == 0)
             {
-                throw new EndOfStreamException("TCP соединение закрыто до получения заголовка.");
+                throw new EndOfStreamException("TCP соединение потеряно");
             }
 
             if (oneByte[0] == (byte)'\n')
@@ -78,7 +92,7 @@ public static class TcpProtocol
             var read = await stream.ReadAsync(payload.AsMemory(offset), cancellationToken);
             if (read == 0)
             {
-                throw new EndOfStreamException("TCP соединение закрыто до получения всех данных.");
+                throw new EndOfStreamException("TCP соединение потеряно");
             }
 
             offset += read;

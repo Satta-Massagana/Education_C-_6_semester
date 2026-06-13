@@ -5,16 +5,8 @@
 @inject WorkerRegistry Workers
 
 <main>
-    <section class="hero">
-        <h1>Распределенная система сжатия данных</h1>
-        <p class="muted">
-            Blazor-интерфейс управляет мастер-узлом, который распределяет сжатие между 4 TCP-воркерами,
-            показывает heartbeat, прогресс, сетевые задержки и сравнение с последовательной обработкой.
-        </p>
-    </section>
-
     <section class="card">
-        <h2>Запуск сжатия</h2>
+        <h2>Запуск сжатия. Лимит загрузки: @FormatBytes(MaxUploadSize). Результат сохраняется в папку <code>CompressedFiles</code>.</h2>
         <div class="grid">
             <div>
                 <label>Файл для сжатия</label>
@@ -27,10 +19,9 @@
 
             <div>
                 <label>Алгоритм</label>
-                <select @bind="selectedAlgorithm">
+                <select @bind="SelectedAlgorithm">
                     <option value="@CompressionAlgorithmType.GZip">GZip</option>
-                    <option value="@CompressionAlgorithmType.Deflate">Deflate</option>
-                    <option value="@CompressionAlgorithmType.Brotli">Brotli</option>
+                    <option value="@CompressionAlgorithmType.Zip">ZIP</option>
                 </select>
             </div>
 
@@ -38,24 +29,159 @@
                 <label>Режим распределения</label>
                 <select @bind="selectedMode">
                     <option value="@DistributionMode.SingleWorker">Один воркер</option>
-                    <option value="@DistributionMode.SplitAcrossWorkers">Разделить файл на части</option>
+                    @if (SelectedAlgorithm != CompressionAlgorithmType.Zip)
+                    {
+                        <option value="@DistributionMode.SplitAcrossWorkers">Разделить файл на части</option>
+                    }
                     <option value="@DistributionMode.FullCopyToAllWorkers">Отправить целиком всем воркерам</option>
                 </select>
             </div>
         </div>
 
-        <p class="muted">
-            Лимит демонстрационной загрузки: @FormatBytes(MaxUploadSize). Результат сохраняется в папку <code>CompressedFiles</code>.
-        </p>
-
-        <button @onclick="StartCompressionAsync" disabled="@(!CanStart)">Сжать файл</button>
-        <button class="secondary" @onclick="CancelCurrentJobAsync" disabled="@(currentJob is null || currentJob.IsFinished)">Отменить задачу</button>
+        <div class="actions">
+            <button @onclick="StartCompressionAsync" disabled="@(!CanStart)">Сжать файл</button>
+        </div>
 
         @if (!string.IsNullOrWhiteSpace(errorMessage))
         {
             <p class="error">@errorMessage</p>
         }
     </section>
+
+    @foreach (var job in sessionJobs)
+    {
+        <section class="card">
+            <h2>Задача @job.Id (@job.FileName)</h2>
+
+            <h3>Общий прогресс</h3>
+            <div class="bar">
+                <div class="fill" style="width:@job.OverallProgressPercent%"></div>
+            </div>
+            <p class="muted">
+                @job.OverallProgressPercent% -
+                @GetProgressDetails(job)
+            </p>
+
+            @if (!job.IsFinished)
+            {
+                <div class="task-actions">
+                    <button class="secondary" @onclick="() => CancelJobAsync(job)">Отменить задачу</button>
+                </div>
+            }
+
+            <div class="stats">
+                <div class="stat">
+                    <strong>Обмен фронт → мастер</strong>
+                    <div class="value">@job.FrontExchangeMilliseconds мс</div>
+                    <div class="subvalue">@FormatMegabitsPerSecond(job.OriginalBytes, job.FrontExchangeMilliseconds)</div>
+                </div>
+                <div class="stat">
+                    <strong>Обмен мастер ↔ воркеры</strong>
+                    <div class="value">@job.WorkerExchangeMilliseconds мс</div>
+                    <div class="subvalue">@FormatMegabitsPerSecond(job.WorkerExchangeBytes, job.WorkerExchangeMilliseconds)</div>
+                </div>
+                <div class="stat">
+                    <strong>Архивирование</strong>
+                    <div class="value">@job.WorkerArchiveElapsedMilliseconds мс</div>
+                    <div class="subvalue">@FormatMegabytesPerSecond(job.OriginalBytes, job.WorkerArchiveElapsedMilliseconds)</div>
+                </div>
+                <div class="stat">
+                    <strong>Общее время</strong>
+                    <div class="value">@job.TotalElapsedMilliseconds мс</div>
+                </div>
+                <div class="stat">
+                    <strong>Коэффициент сжатия</strong>
+                    <div class="value">@GetCompressionRatioText(job)</div>
+                    <div class="subvalue">@GetCompressionSizeText(job)</div>
+                </div>
+            </div>
+
+            <h3 class="section-subtitle">Распределение по воркерам</h3>
+            <div class="grid">
+                @foreach (var progress in job.WorkerProgress.Values.OrderBy(item => item.WorkerId).ThenBy(item => item.PartIndex))
+                {
+                    <div class="worker">
+                        <h3>@progress.WorkerId</h3>
+                        <p>Статус: @progress.Status</p>
+                        <div class="bar">
+                            <div class="fill" style="width:@progress.ProgressPercent%"></div>
+                        </div>
+                        <p class="muted">
+                            Архивирование: @progress.WorkerElapsedMilliseconds мс<br />
+                            TCP round-trip: @progress.NetworkElapsedMilliseconds мс<br />
+                            @FormatBytes(progress.OriginalBytes) → @FormatBytes(progress.CompressedBytes)
+                        </p>
+                        @if (!string.IsNullOrWhiteSpace(progress.ErrorMessage))
+                        {
+                            <p class="error">@progress.ErrorMessage</p>
+                        }
+                    </div>
+                }
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(job.DownloadUrl))
+            {
+                <p><a href="@job.DownloadUrl" target="_blank">Скачать сжатый файл</a></p>
+            }
+        </section>
+    }
+
+    @if (sessionJobs.Count > 0)
+    {
+        <section class="card">
+            <h2>Журнал операций</h2>
+            <div class="logs">
+                @foreach (var entry in GetSessionLogEntries())
+                {
+                    <div>@entry</div>
+                }
+            </div>
+        </section>
+    }
+
+    @if (sessionJobs.Count > 1)
+    {
+        <section class="card comparison-card">
+            <h2>Сравнение</h2>
+            <div class="comparison-table-wrapper">
+                <table class="comparison-table">
+                    <thead>
+                        <tr>
+                            <th>Задача</th>
+                            <th><button class="sort-header" @onclick="() => ToggleComparisonSort(ComparisonSortColumn.TotalTime)">Время @GetSortMarker(ComparisonSortColumn.TotalTime)</button></th>
+                            <th><button class="sort-header" @onclick="() => ToggleComparisonSort(ComparisonSortColumn.CompressionRatio)">Сжатие % @GetSortMarker(ComparisonSortColumn.CompressionRatio)</button></th>
+                            <th><button class="sort-header" @onclick="() => ToggleComparisonSort(ComparisonSortColumn.FrontExchange)">Фронт → мастер @GetSortMarker(ComparisonSortColumn.FrontExchange)</button></th>
+                            <th><button class="sort-header" @onclick="() => ToggleComparisonSort(ComparisonSortColumn.WorkerExchange)">Мастер ↔ воркеры @GetSortMarker(ComparisonSortColumn.WorkerExchange)</button></th>
+                            <th><button class="sort-header" @onclick="() => ToggleComparisonSort(ComparisonSortColumn.ArchiveTime)">Архивирование @GetSortMarker(ComparisonSortColumn.ArchiveTime)</button></th>
+                            <th>Воркеры</th>
+                            <th>Алгоритм</th>
+                            <th>Сжатие</th>
+                            <th>Режим</th>
+                            <th>Файл</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var job in GetComparisonJobs())
+                        {
+                            <tr>
+                                <td>@job.Id</td>
+                                <td>@BestValue(job, ComparisonSortColumn.TotalTime, $"{job.TotalElapsedMilliseconds} мс")</td>
+                                <td>@BestValue(job, ComparisonSortColumn.CompressionRatio, job.CompressionRatio.ToString("P2", CultureInfo.CurrentCulture))</td>
+                                <td>@BestValue(job, ComparisonSortColumn.FrontExchange, $"{job.FrontExchangeMilliseconds} мс")</td>
+                                <td>@BestValue(job, ComparisonSortColumn.WorkerExchange, $"{job.WorkerExchangeMilliseconds} мс")</td>
+                                <td>@BestValue(job, ComparisonSortColumn.ArchiveTime, $"{job.WorkerArchiveElapsedMilliseconds} мс")</td>
+                                <td>@GetWorkerCount(job)</td>
+                                <td>@FormatAlgorithm(job.Algorithm)</td>
+                                <td>@GetCompressionSizeText(job)</td>
+                                <td>@FormatDistributionMode(job.Mode)</td>
+                                <td>@job.FileName</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    }
 
     <section class="card">
         <h2>Состояние воркеров</h2>
@@ -72,94 +198,49 @@
             }
         </div>
     </section>
-
-    @if (currentJob is not null)
-    {
-        <section class="card">
-            <h2>Задача @currentJob.Id</h2>
-            <p>
-                <strong>@currentJob.FileName</strong>:
-                @currentJob.Status,
-                @FormatBytes(currentJob.OriginalBytes) → @FormatBytes(currentJob.CompressedBytes)
-            </p>
-
-            <div class="stats">
-                <div class="stat">
-                    <strong>Общее время</strong>
-                    <div>@currentJob.TotalElapsedMilliseconds мс</div>
-                </div>
-                <div class="stat">
-                    <strong>Последовательно</strong>
-                    <div>@currentJob.SequentialElapsedMilliseconds мс</div>
-                </div>
-                <div class="stat">
-                    <strong>Обмен фронт → мастер</strong>
-                    <div>@currentJob.FrontExchangeMilliseconds мс</div>
-                </div>
-                <div class="stat">
-                    <strong>Обмен мастер ↔ воркеры</strong>
-                    <div>@currentJob.WorkerExchangeMilliseconds мс</div>
-                </div>
-                <div class="stat">
-                    <strong>Коэффициент сжатия</strong>
-                    <div>@currentJob.CompressionRatio.ToString("P2", CultureInfo.CurrentCulture)</div>
-                </div>
-            </div>
-
-            <h3>Распределение по воркерам</h3>
-            <div class="grid">
-                @foreach (var progress in currentJob.WorkerProgress.Values.OrderBy(item => item.WorkerId).ThenBy(item => item.PartIndex))
-                {
-                    <div class="worker">
-                        <h3>@progress.WorkerId</h3>
-                        <p>Часть: @(progress.PartIndex + 1) / @progress.TotalParts</p>
-                        <p>Статус: @progress.Status</p>
-                        <div class="bar">
-                            <div class="fill" style="width:@progress.ProgressPercent%"></div>
-                        </div>
-                        <p class="muted">
-                            CPU: @progress.WorkerElapsedMilliseconds мс,
-                            сеть: @progress.NetworkElapsedMilliseconds мс,
-                            @FormatBytes(progress.OriginalBytes) → @FormatBytes(progress.CompressedBytes)
-                        </p>
-                        @if (!string.IsNullOrWhiteSpace(progress.ErrorMessage))
-                        {
-                            <p class="error">@progress.ErrorMessage</p>
-                        }
-                    </div>
-                }
-            </div>
-
-            @if (!string.IsNullOrWhiteSpace(currentJob.DownloadUrl))
-            {
-                <p><a href="@currentJob.DownloadUrl" target="_blank">Скачать сжатый файл</a></p>
-            }
-        </section>
-
-        <section class="card">
-            <h2>Журнал операций</h2>
-            <div class="logs">
-                @foreach (var entry in currentJob.Logs.Reverse())
-                {
-                    <div>@entry</div>
-                }
-            </div>
-        </section>
-    }
 </main>
 
 @code {
-    private const long MaxUploadSize = 128 * 1024 * 1024;
+    private enum ComparisonSortColumn
+    {
+        TotalTime,
+        CompressionRatio,
+        FrontExchange,
+        WorkerExchange,
+        ArchiveTime
+    }
+
+    private const long MaxUploadSize = 5L * 1024 * 1024 * 1024;
     private readonly PeriodicTimer uiTimer = new(TimeSpan.FromMilliseconds(300));
+    private readonly List<CompressionJob> sessionJobs = new();
+    private readonly Dictionary<string, CancellationTokenSource> jobCancellations = new();
+    private ComparisonSortColumn? comparisonSortColumn;
+    private bool comparisonSortDescending = true;
     private CompressionAlgorithmType selectedAlgorithm = CompressionAlgorithmType.GZip;
     private DistributionMode selectedMode = DistributionMode.SplitAcrossWorkers;
     private IBrowserFile? selectedFile;
-    private CompressionJob? currentJob;
-    private CancellationTokenSource? uploadCancellation;
     private string? errorMessage;
     private bool disposed;
 
-    private bool CanStart => selectedFile is not null && (currentJob is null || currentJob.IsFinished);
+    private bool CanStart => selectedFile is not null;
+
+    private CompressionAlgorithmType SelectedAlgorithm
+    {
+        get => selectedAlgorithm;
+        set
+        {
+            selectedAlgorithm = value;
+
+            if (
+                selectedAlgorithm == CompressionAlgorithmType.Zip
+                && selectedMode == DistributionMode.SplitAcrossWorkers
+            )
+            {
+                // ZIP не умеет собирать один файл из независимо сжатых частей без пересжатия на мастере.
+                selectedMode = DistributionMode.SingleWorker;
+            }
+        }
+    }
 
     protected override void OnInitialized()
     {
@@ -181,38 +262,47 @@
             return;
         }
 
-        uploadCancellation?.Dispose();
-        uploadCancellation = new CancellationTokenSource();
+        var jobCancellation = new CancellationTokenSource();
         errorMessage = null;
 
         try
         {
-            // Поток файла читается асинхронно, чтобы не блокировать серверный UI Circuit Blazor.
-            await using var stream = selectedFile.OpenReadStream(MaxUploadSize, uploadCancellation.Token);
-            currentJob = await Master.StartCompressionAsync(
+            // Мастер забирает владение stream и читает его в фоне, чтобы UI сразу показывал прогресс.
+            var stream = selectedFile.OpenReadStream(MaxUploadSize, jobCancellation.Token);
+            var job = await Master.StartCompressionAsync(
                 selectedFile.Name,
+                selectedFile.Size,
                 stream,
-                selectedAlgorithm,
+                SelectedAlgorithm,
                 selectedMode,
-                uploadCancellation.Token);
+                jobCancellation.Token);
+
+            jobCancellations[job.Id] = jobCancellation;
+            sessionJobs.Add(job);
         }
         catch (OperationCanceledException)
         {
+            jobCancellation.Dispose();
             errorMessage = "Загрузка или сжатие отменены.";
         }
         catch (Exception ex)
         {
+            jobCancellation.Dispose();
             errorMessage = ex.Message;
         }
     }
 
-    private Task CancelCurrentJobAsync()
+    private Task CancelJobAsync(CompressionJob job)
     {
-        if (currentJob is not null)
+        if (!job.IsFinished)
         {
             // Отмена передается через CancellationToken и останавливает пайплайн без Thread.Abort.
-            Master.CancelJob(currentJob.Id);
-            uploadCancellation?.Cancel();
+            Master.CancelJob(job.Id);
+
+            if (jobCancellations.TryGetValue(job.Id, out var cancellation))
+            {
+                cancellation.Cancel();
+            }
         }
 
         return Task.CompletedTask;
@@ -224,6 +314,226 @@
         {
             await InvokeAsync(StateHasChanged);
         }
+    }
+
+    private IEnumerable<string> GetSessionLogEntries()
+    {
+        return sessionJobs
+            .SelectMany(job => job.Logs.Select(entry => $"{job.Id} | {entry}"))
+            .OrderByDescending(entry => entry.Split('|', 2).Last().Trim(), StringComparer.Ordinal);
+    }
+
+    private IEnumerable<CompressionJob> GetComparisonJobs()
+    {
+        // В сравнение попадают только успешно завершенные задачи, чтобы таблица не менялась во время архивирования.
+        var jobs = sessionJobs.Where(job => job.Status == "Завершена");
+
+        if (comparisonSortColumn is null)
+        {
+            return jobs;
+        }
+
+        return comparisonSortDescending
+            ? jobs.OrderByDescending(GetComparisonSortValue)
+            : jobs.OrderBy(GetComparisonSortValue);
+    }
+
+    private double GetComparisonSortValue(CompressionJob job)
+    {
+        return comparisonSortColumn switch
+        {
+            ComparisonSortColumn.TotalTime => job.TotalElapsedMilliseconds,
+            ComparisonSortColumn.CompressionRatio => job.CompressionRatio,
+            ComparisonSortColumn.FrontExchange => job.FrontExchangeMilliseconds,
+            ComparisonSortColumn.WorkerExchange => job.WorkerExchangeMilliseconds,
+            ComparisonSortColumn.ArchiveTime => job.WorkerArchiveElapsedMilliseconds,
+            _ => 0
+        };
+    }
+
+    private void ToggleComparisonSort(ComparisonSortColumn column)
+    {
+        if (comparisonSortColumn == column)
+        {
+            comparisonSortDescending = !comparisonSortDescending;
+            return;
+        }
+
+        comparisonSortColumn = column;
+        comparisonSortDescending = true;
+    }
+
+    private string GetSortMarker(ComparisonSortColumn column)
+    {
+        if (comparisonSortColumn != column)
+        {
+            return string.Empty;
+        }
+
+        return comparisonSortDescending ? "↓" : "↑";
+    }
+
+    private MarkupString BestValue(CompressionJob job, ComparisonSortColumn column, string text)
+    {
+        if (!IsBestComparisonValue(job, column))
+        {
+            return new MarkupString(text);
+        }
+
+        return new MarkupString($"<span class=\"best-value\">{text}</span>");
+    }
+
+    private bool IsBestComparisonValue(CompressionJob job, ComparisonSortColumn column)
+    {
+        var completedJobs = sessionJobs
+            .Where(item => item.Status == "Завершена")
+            .ToArray();
+
+        if (completedJobs.Length < 2)
+        {
+            return false;
+        }
+
+        var value = GetComparisonValue(job, column);
+        var best = column == ComparisonSortColumn.CompressionRatio
+            ? completedJobs.Max(item => GetComparisonValue(item, column))
+            : completedJobs.Min(item => GetComparisonValue(item, column));
+
+        var latestBestJob = completedJobs
+            .Where(item => Math.Abs(GetComparisonValue(item, column) - best) < 0.000001)
+            .OrderBy(item => item.CompletedAtUtc ?? DateTimeOffset.MinValue)
+            .LastOrDefault();
+
+        return ReferenceEquals(job, latestBestJob);
+    }
+
+    private static double GetComparisonValue(CompressionJob job, ComparisonSortColumn column)
+    {
+        return column switch
+        {
+            ComparisonSortColumn.TotalTime => job.TotalElapsedMilliseconds,
+            ComparisonSortColumn.CompressionRatio => job.CompressionRatio,
+            ComparisonSortColumn.FrontExchange => job.FrontExchangeMilliseconds,
+            ComparisonSortColumn.WorkerExchange => job.WorkerExchangeMilliseconds,
+            ComparisonSortColumn.ArchiveTime => job.WorkerArchiveElapsedMilliseconds,
+            _ => 0
+        };
+    }
+
+    private static int GetWorkerCount(CompressionJob job)
+    {
+        return job.WorkerProgress.Values
+            .Where(progress => progress.Status == "Готово")
+            .Select(progress => progress.WorkerId)
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+    }
+
+    private static string FormatAlgorithm(CompressionAlgorithmType algorithm)
+    {
+        return algorithm == CompressionAlgorithmType.Zip ? "ZIP" : "GZip";
+    }
+
+    private static string FormatDistributionMode(DistributionMode mode)
+    {
+        return mode switch
+        {
+            DistributionMode.SingleWorker => "Один воркер",
+            DistributionMode.SplitAcrossWorkers => "Разделить файл на части",
+            DistributionMode.FullCopyToAllWorkers => "Отправить целиком всем воркерам",
+            _ => mode.ToString()
+        };
+    }
+
+    private static string GetProgressDetails(CompressionJob job)
+    {
+        if (job.UploadedBytes < job.OriginalBytes && !job.IsFinished)
+        {
+            return $"загружено {FormatBytes(job.UploadedBytes)} из {FormatBytes(job.OriginalBytes)}";
+        }
+
+        if (job.IsFinished)
+        {
+            return job.Status == "Ошибка" && !string.IsNullOrWhiteSpace(job.ErrorMessage)
+                ? $"Ошибка: {job.ErrorMessage}"
+                : job.Status;
+        }
+
+        var workerStatuses = job.WorkerProgress.Values
+            .Select(progress => NormalizeWorkerStatus(progress.Status))
+            .Where(status => !string.IsNullOrWhiteSpace(status))
+            .Distinct()
+            .OrderBy(GetStatusPriority)
+            .ToArray();
+
+        return workerStatuses.Length == 0
+            ? job.Status
+            : $"{job.Status}, {string.Join(", ", workerStatuses)}";
+    }
+
+    private static string NormalizeWorkerStatus(string status)
+    {
+        return status switch
+        {
+            "Сжатие на воркере" => "Сжатие на воркерах",
+            "Передача на воркер" => "Передача на воркеры",
+            "Отправка по TCP" => "Передача на воркеры",
+            "Повторная отправка" => "Передача на воркеры",
+            _ => status
+        };
+    }
+
+    private static int GetStatusPriority(string status)
+    {
+        return status switch
+        {
+            "Сжатие на воркерах" => 0,
+            "Передача на воркеры" => 1,
+            "Готово" => 2,
+            _ => 10
+        };
+    }
+
+    private static string GetCompressionRatioText(CompressionJob job)
+    {
+        if (!job.IsFinished || job.CompressedBytes <= 0)
+        {
+            return string.Empty;
+        }
+
+        return job.CompressionRatio.ToString("P2", CultureInfo.CurrentCulture);
+    }
+
+    private static string GetCompressionSizeText(CompressionJob job)
+    {
+        if (!job.IsFinished || job.CompressedBytes <= 0)
+        {
+            return string.Empty;
+        }
+
+        return $"{FormatBytes(job.OriginalBytes)} → {FormatBytes(job.CompressedBytes)}";
+    }
+
+    private static string FormatMegabitsPerSecond(long bytes, long milliseconds)
+    {
+        if (bytes <= 0 || milliseconds <= 0)
+        {
+            return string.Empty;
+        }
+
+        var megabitsPerSecond = bytes * 8d / 1_000_000d / (milliseconds / 1000d);
+        return $"{megabitsPerSecond:0.##} Мбит/с";
+    }
+
+    private static string FormatMegabytesPerSecond(long bytes, long milliseconds)
+    {
+        if (bytes <= 0 || milliseconds <= 0)
+        {
+            return string.Empty;
+        }
+
+        var megabytesPerSecond = bytes / 1024d / 1024d / (milliseconds / 1000d);
+        return $"{megabytesPerSecond:0.##} Мбайт/с";
     }
 
     private static string FormatBytes(long bytes)
@@ -245,6 +555,10 @@
     {
         disposed = true;
         uiTimer.Dispose();
-        uploadCancellation?.Dispose();
+
+        foreach (var cancellation in jobCancellations.Values)
+        {
+            cancellation.Dispose();
+        }
     }
 }

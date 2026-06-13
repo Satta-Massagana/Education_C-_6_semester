@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text;
-using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -38,47 +37,35 @@ public sealed class MasterCompressionService
         this.logger = logger;
     }
 
-    public async Task<CompressionJob> StartCompressionAsync(
+    public Task<CompressionJob> StartCompressionAsync(
         string fileName,
+        long originalBytes,
         Stream input,
         CompressionAlgorithmType algorithm,
         DistributionMode mode,
         CancellationToken cancellationToken
     )
     {
-        var frontStopwatch = Stopwatch.StartNew();
-        await using var buffer = new MemoryStream();
-
-        // Входной файл читается async/await, чтобы I/O не блокировал поток обработки запросов.
-        await input.CopyToAsync(buffer, cancellationToken);
-        var data = buffer.ToArray();
-        frontStopwatch.Stop();
-
-        if (data.Length == 0)
-        {
-            throw new InvalidDataException("Пустой файл нельзя сжать.");
-        }
-
         var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var job = new CompressionJob
         {
             FileName = Path.GetFileName(fileName),
             Algorithm = algorithm,
             Mode = mode,
-            OriginalBytes = data.LongLength,
-            FrontExchangeMilliseconds = frontStopwatch.ElapsedMilliseconds,
-            Status = "Поставлена в очередь",
+            OriginalBytes = originalBytes,
+            Status = "Загрузка файла",
+            OverallProgressPercent = 1,
         };
 
-        job.AddLog($"Файл загружен на мастер за {frontStopwatch.ElapsedMilliseconds} мс.");
+        job.AddLog("Задача создана, начато чтение файла в память.");
         jobStore.Add(job, linkedCancellation);
 
         _ = Task.Run(
-            () => ExecuteJobAsync(job, data, linkedCancellation.Token),
+            () => ExecuteJobAsync(job, input, linkedCancellation.Token),
             CancellationToken.None
         );
 
-        return job;
+        return Task.FromResult(job);
     }
 
     public void CancelJob(string jobId)
@@ -86,9 +73,56 @@ public sealed class MasterCompressionService
         jobStore.Cancel(jobId);
     }
 
+    private static async Task<byte[]> ReadInputAsync(
+        CompressionJob job,
+        Stream input,
+        CancellationToken cancellationToken
+    )
+    {
+        var frontStopwatch = Stopwatch.StartNew();
+        const int chunkSize = 1024 * 1024;
+        await using var buffer = new MemoryStream();
+        var chunk = new byte[chunkSize];
+        long uploaded = 0;
+        var nextLoggedPercent = 10;
+
+        while (true)
+        {
+            var read = await input.ReadAsync(chunk, cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken);
+            uploaded += read;
+            job.UploadedBytes = uploaded;
+            job.OverallProgressPercent = ScaleProgress(uploaded, job.OriginalBytes, 1, 35);
+
+            var uploadPercent =
+                job.OriginalBytes <= 0
+                    ? 100
+                    : (int)Math.Min(100, uploaded * 100 / job.OriginalBytes);
+
+            if (uploadPercent >= nextLoggedPercent)
+            {
+                job.AddLog($"Файл прочитан в память на {uploadPercent}%.");
+                nextLoggedPercent += 10;
+            }
+        }
+
+        frontStopwatch.Stop();
+        job.FrontExchangeMilliseconds = frontStopwatch.ElapsedMilliseconds;
+        job.UploadedBytes = uploaded;
+        job.OverallProgressPercent = Math.Max(job.OverallProgressPercent, 35);
+        job.AddLog($"Файл загружен на мастер за {frontStopwatch.ElapsedMilliseconds} мс.");
+
+        return buffer.ToArray();
+    }
+
     private async Task ExecuteJobAsync(
         CompressionJob job,
-        byte[] data,
+        Stream input,
         CancellationToken cancellationToken
     )
     {
@@ -96,16 +130,19 @@ public sealed class MasterCompressionService
 
         try
         {
-            job.Status = "Последовательный бенчмарк";
-            job.SequentialElapsedMilliseconds = await MeasureSequentialAsync(
-                data,
-                job.Algorithm,
-                cancellationToken
-            );
-            job.AddLog($"Последовательное сжатие заняло {job.SequentialElapsedMilliseconds} мс.");
+            await using var inputOwner = input;
+            var data = await ReadInputAsync(job, inputOwner, cancellationToken);
+
+            if (data.Length == 0)
+            {
+                throw new InvalidDataException("Пустой файл нельзя сжать.");
+            }
 
             job.Status = "Распределение по воркерам";
+            job.OverallProgressPercent = Math.Max(job.OverallProgressPercent, 36);
+            job.AddLog("Начата подготовка заданий для воркеров.");
             var workItems = CreateWorkItems(job, data);
+            job.OverallProgressPercent = Math.Max(job.OverallProgressPercent, 45);
             job.TotalParts = workItems.Count;
 
             if (workItems.Count == 0)
@@ -131,27 +168,48 @@ public sealed class MasterCompressionService
             }
 
             job.Status = "Агрегация результатов";
+            job.OverallProgressPercent = Math.Max(job.OverallProgressPercent, 95);
             var outputBytes = BuildOutput(job, results);
+            job.OverallProgressPercent = Math.Max(job.OverallProgressPercent, 98);
             var outputPath = await SaveOutputAsync(job, outputBytes, cancellationToken);
 
             job.OutputPath = outputPath;
             job.DownloadUrl = $"/compressed/{Path.GetFileName(outputPath)}";
             job.CompressedBytes = outputBytes.LongLength;
+            job.WorkerArchiveElapsedMilliseconds =
+                results.Count == 0
+                    ? 0
+                    : results.AsParallel().Max(result => result.WorkerElapsedMilliseconds);
+            job.WorkerExchangeBytes = results
+                .AsParallel()
+                .Sum(result => result.OriginalBytes + result.CompressedBytes);
             job.WorkerExchangeMilliseconds = results
                 .AsParallel()
-                .Sum(result => result.NetworkElapsedMilliseconds);
+                .Sum(result =>
+                    Math.Max(
+                        0,
+                        result.NetworkElapsedMilliseconds - result.WorkerElapsedMilliseconds
+                    )
+                );
             job.TotalElapsedMilliseconds = totalStopwatch.ElapsedMilliseconds;
             job.Status = "Завершена";
+            job.CompletedAtUtc = DateTimeOffset.UtcNow;
+            job.OverallProgressPercent = 100;
             job.AddLog($"Результат сохранен: {outputPath}.");
         }
         catch (OperationCanceledException)
         {
             job.Status = "Отменена";
+            job.CompletedAtUtc = DateTimeOffset.UtcNow;
+            job.OverallProgressPercent = Math.Min(job.OverallProgressPercent, 99);
             job.AddLog("Задача отменена пользователем.");
         }
         catch (Exception ex)
         {
             job.Status = "Ошибка";
+            job.ErrorMessage = ex.Message;
+            job.CompletedAtUtc = DateTimeOffset.UtcNow;
+            job.OverallProgressPercent = Math.Min(job.OverallProgressPercent, 99);
             job.AddLog($"Ошибка: {ex.Message}");
             logger.LogError(ex, "Ошибка выполнения задачи {JobId}.", job.Id);
         }
@@ -163,20 +221,18 @@ public sealed class MasterCompressionService
         }
     }
 
-    private async Task<long> MeasureSequentialAsync(
-        byte[] data,
-        CompressionAlgorithmType algorithm,
-        CancellationToken cancellationToken
-    )
-    {
-        var stopwatch = Stopwatch.StartNew();
-        _ = await algorithms.Get(algorithm).CompressAsync(data, cancellationToken);
-        stopwatch.Stop();
-        return stopwatch.ElapsedMilliseconds;
-    }
-
     private IReadOnlyList<CompressionWorkItem> CreateWorkItems(CompressionJob job, byte[] data)
     {
+        if (
+            job.Algorithm == CompressionAlgorithmType.Zip
+            && job.Mode == DistributionMode.SplitAcrossWorkers
+        )
+        {
+            throw new NotSupportedException(
+                "ZIP не поддерживает режим разделения файла на части. Выберите один воркер или отправку полного файла всем воркерам."
+            );
+        }
+
         var workers = workerSelection.SelectWorkers(4);
 
         return job.Mode switch
@@ -195,6 +251,7 @@ public sealed class MasterCompressionService
     )
     {
         var worker = workers.FirstOrDefault();
+        job.OverallProgressPercent = Math.Max(job.OverallProgressPercent, worker is null ? 36 : 45);
         return worker is null
             ? Array.Empty<CompressionWorkItem>()
             : new[]
@@ -219,6 +276,10 @@ public sealed class MasterCompressionService
     )
     {
         var selected = workers.Take(4).ToArray();
+        job.OverallProgressPercent = Math.Max(
+            job.OverallProgressPercent,
+            selected.Length == 0 ? 36 : 45
+        );
 
         return selected
             .Select(
@@ -257,10 +318,12 @@ public sealed class MasterCompressionService
 
         for (var index = 0; index < partCount; index++)
         {
+            job.Status = $"Подготовка части {index + 1}/{partCount}";
             var partSize = baseSize + (index < remainder ? 1 : 0);
             var part = new byte[partSize];
-            Buffer.BlockCopy(data, offset, part, 0, partSize);
+            CopyPartWithProgress(data, offset, part, job);
             offset += partSize;
+            job.OverallProgressPercent = ScaleProgress(offset, data.LongLength, 36, 45);
 
             items.Add(
                 new CompressionWorkItem(
@@ -277,6 +340,30 @@ public sealed class MasterCompressionService
         }
 
         return items;
+    }
+
+    private static void CopyPartWithProgress(
+        byte[] source,
+        int sourceOffset,
+        byte[] destination,
+        CompressionJob job
+    )
+    {
+        const int chunkSize = 16 * 1024 * 1024;
+        var copied = 0;
+
+        while (copied < destination.Length)
+        {
+            var length = Math.Min(chunkSize, destination.Length - copied);
+            Buffer.BlockCopy(source, sourceOffset + copied, destination, copied, length);
+            copied += length;
+            job.OverallProgressPercent = ScaleProgress(
+                sourceOffset + copied,
+                source.LongLength,
+                36,
+                45
+            );
+        }
     }
 
     private static void InitializeProgress(
@@ -327,11 +414,34 @@ public sealed class MasterCompressionService
 
             workerRegistry.IncrementActive(activeWorkerId);
             progress.Status = attempt == 1 ? "Отправка по TCP" : "Повторная отправка";
-            progress.ProgressPercent = 25;
+            progress.ProgressPercent = 10;
+            UpdateOverallWorkerProgress(job);
 
             try
             {
-                var result = await tcpClient.CompressAsync(current, cancellationToken);
+                var result = await tcpClient.CompressAsync(
+                    current,
+                    cancellationToken,
+                    (sentBytes, totalBytes) =>
+                    {
+                        progress.Status = "Передача на воркер";
+                        progress.ProgressPercent = ScaleProgress(sentBytes, totalBytes, 10, 35);
+                        UpdateOverallWorkerProgress(job);
+                    },
+                    workerProgress =>
+                    {
+                        progress.Status = "Сжатие на воркере";
+                        progress.ProgressPercent = ScaleProgress(
+                            workerProgress.CompressedBytes,
+                            workerProgress.OriginalBytes,
+                            35,
+                            90
+                        );
+                        progress.WorkerElapsedMilliseconds =
+                            workerProgress.WorkerElapsedMilliseconds;
+                        UpdateOverallWorkerProgress(job);
+                    }
+                );
 
                 if (!result.Success)
                 {
@@ -347,6 +457,7 @@ public sealed class MasterCompressionService
                 progress.WorkerElapsedMilliseconds = result.WorkerElapsedMilliseconds;
                 progress.NetworkElapsedMilliseconds = result.NetworkElapsedMilliseconds;
                 job.MarkPartCompleted();
+                UpdateOverallWorkerProgress(job);
                 job.AddLog(
                     $"{current.Worker.Id} сжал часть {current.PartIndex + 1}/{current.TotalParts} за {result.WorkerElapsedMilliseconds} мс."
                 );
@@ -430,7 +541,7 @@ public sealed class MasterCompressionService
             return AddArchiveFileNameIfNeeded(job, results.Single().CompressedPayload);
         }
 
-        return BuildDistributedContainer(job, results);
+        return BuildMultiMemberGzip(job, results);
     }
 
     private static byte[] AddArchiveFileNameIfNeeded(CompressionJob job, byte[] compressedPayload)
@@ -444,6 +555,27 @@ public sealed class MasterCompressionService
         }
 
         return AddOriginalFileNameToGzip(compressedPayload, job.FileName);
+    }
+
+    private static byte[] BuildMultiMemberGzip(
+        CompressionJob job,
+        IReadOnlyList<WorkerCompressionResult> results
+    )
+    {
+        var ordered = results.OrderBy(result => result.PartIndex).ToArray();
+        using var output = new MemoryStream(ordered.Sum(part => part.CompressedPayload.Length));
+
+        for (var index = 0; index < ordered.Length; index++)
+        {
+            var payload = ordered[index].CompressedPayload;
+
+            // Multi-member GZip разрешает хранить несколько независимых GZip-потоков подряд.
+            // WinRAR распаковывает их как один файл, если читает стандартный GZip multi-member формат.
+            var member = index == 0 ? AddOriginalFileNameToGzip(payload, job.FileName) : payload;
+            output.Write(member);
+        }
+
+        return output.ToArray();
     }
 
     private static byte[] AddOriginalFileNameToGzip(byte[] gzipBytes, string originalFileName)
@@ -481,46 +613,6 @@ public sealed class MasterCompressionService
         return output.ToArray();
     }
 
-    private static byte[] BuildDistributedContainer(
-        CompressionJob job,
-        IReadOnlyList<WorkerCompressionResult> results
-    )
-    {
-        var ordered = results.OrderBy(result => result.PartIndex).ToArray();
-        var manifest = new
-        {
-            Format = "DCMP1",
-            job.FileName,
-            Algorithm = job.Algorithm.ToString(),
-            job.OriginalBytes,
-            Parts = ordered.Select(part => new
-            {
-                part.PartIndex,
-                part.OriginalBytes,
-                part.CompressedBytes,
-                part.WorkerId,
-            }),
-        };
-
-        using var output = new MemoryStream();
-        using var writer = new BinaryWriter(output, System.Text.Encoding.UTF8, leaveOpen: true);
-        var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest);
-
-        // Контейнер нужен, потому что каждая часть сжимается независимо и должна хранить метаданные.
-        writer.Write("DCMP1");
-        writer.Write(manifestBytes.Length);
-        writer.Write(manifestBytes);
-
-        foreach (var part in ordered)
-        {
-            writer.Write(part.CompressedPayload.Length);
-            writer.Write(part.CompressedPayload);
-        }
-
-        writer.Flush();
-        return output.ToArray();
-    }
-
     private async Task<string> SaveOutputAsync(
         CompressionJob job,
         byte[] outputBytes,
@@ -530,16 +622,13 @@ public sealed class MasterCompressionService
         var directory = Path.Combine(environment.ContentRootPath, "CompressedFiles");
         Directory.CreateDirectory(directory);
 
-        var extension =
-            job.Mode == DistributionMode.SplitAcrossWorkers
-                ? ".dcmp"
-                : algorithms.Get(job.Algorithm).FileExtension;
+        var extension = algorithms.Get(job.Algorithm).FileExtension;
 
         var safeOriginalName = SanitizeFileName(job.FileName);
         var originalNameWithoutExtension = Path.GetFileNameWithoutExtension(safeOriginalName);
         var originalExtension = Path.GetExtension(safeOriginalName);
 
-        // Расширение исходного файла ставим перед .gz/.br/.deflate,
+        // Расширение исходного файла ставим перед расширением архива,
         // чтобы WinRAR после распаковки дал файл с правильным типом, например report_a1b2c3d4.pdf.
         var fileName = $"{originalNameWithoutExtension}_{job.Id}{originalExtension}{extension}";
         var path = Path.Combine(directory, fileName);
@@ -555,6 +644,29 @@ public sealed class MasterCompressionService
             fileName.Select(character => invalid.Contains(character) ? '_' : character).ToArray()
         );
         return string.IsNullOrWhiteSpace(safe) ? "compressed" : safe;
+    }
+
+    private static int ScaleProgress(long current, long total, int fromPercent, int toPercent)
+    {
+        if (total <= 0)
+        {
+            return toPercent;
+        }
+
+        var ratio = Math.Clamp((double)current / total, 0, 1);
+        return fromPercent + (int)Math.Round((toPercent - fromPercent) * ratio);
+    }
+
+    private static void UpdateOverallWorkerProgress(CompressionJob job)
+    {
+        if (job.WorkerProgress.IsEmpty)
+        {
+            return;
+        }
+
+        var averageWorkerProgress = job.WorkerProgress.Values.Average(item => item.ProgressPercent);
+        var scaled = 45 + (int)Math.Round(47 * averageWorkerProgress / 100);
+        job.OverallProgressPercent = Math.Max(job.OverallProgressPercent, Math.Min(92, scaled));
     }
 
     private static string GetProgressKey(string workerId, int partIndex)
